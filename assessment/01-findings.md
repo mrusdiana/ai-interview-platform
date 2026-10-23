@@ -1,0 +1,49 @@
+# 01 — Findings: Problem & Gap to Ideal Condition
+
+Scope: the path from **portfolio → assessor override → fit/gap report → screen/PDF**, i.e. the moment a hiring decision is made about a candidate.
+Method: code reading of `api/` and `web/` along that path, schema inspection, cross-checking the JSON contract between the two services. Items marked *(code-verified)* are confirmed by reading the code path end to end; they will be pinned by failing tests in stage 3 before any fix.
+
+Severity: **P0** = wrong decision or data leak, ship-blocking · **P1** = misleads the user in a common case · **P2** = degrades trust/edge case · **P3** = polish / DX.
+Type: **DEF** = defined but broken · **SPEC** = never specified.
+
+## Core problem (one paragraph)
+
+The fit/gap report is the only artifact a recruiter reads to decide on a candidate, and today it **can be wrong without looking wrong**: the screen drops the required level, hides which levels a human changed, treats "never asked about" as if it were neutral, hides when the AI narrative failed, and spins forever when generation dies. Underneath, any assessor can read or change another company's candidate by guessing an ID. The ideal condition: a report that is *honest about what it knows* (coverage, confidence, human vs AI, AI failure), *correct across the API/web seam*, and *only visible to the tenant that owns it*.
+
+## Findings
+
+| # | Sev | Type | Where | Finding | Impact on real workflow |
+|---|---|---|---|---|---|
+| F1 | P0 | DEF | `api/.../portfolios_controller.rb` (`fitgap`, `show_fitgap`, `regenerate_fitgap`, `export`), `portfolio_skills_controller.rb#set_portfolio_skill` | `Portfolio`, `PortfolioSkill`, `FitGapReport` are **not** `TenantScoped` and have no `tenant_id`; controllers load them with plain `find(params[:id])`. *(code-verified)* | An assessor of company A can read company B's candidate report, and **override B's candidate's skill levels**, by incrementing an ID. Personal data leak under UU PDP + silent tampering of a hiring outcome. |
+| F2 | P0 | DEF | `web/src/types/index.ts` `SkillComparison` vs `api/.../fit_gap/engine.rb#build_skill_comparisons` | Web reads `required_level` and `is_override`; API sends `expected_level` and never sends an override flag. *(code-verified)* | **"Required" column is blank on every row**, so the recruiter cannot see what the gap is against. The ✏ override marker never appears, so AI and human judgements look identical. The PDF (`pdf_generator.rb`) reads the correct key → **screen and PDF disagree**. |
+| F3 | P1 | DEF | `FitGapReportPage.tsx#fetchReport` + `usePolling` | While "generating", every 5 s poll gets 404 and **re-POSTs `/fitgap`**, enqueuing another `FitGapGeneratorWorker` each time. If the job dies (retries exhausted), the page spins **forever**; there is no failed state in the API either. *(code-verified)* | Duplicate Gemini calls (cost) and a recruiter stuck on a spinner with no way to know it failed. |
+| F4 | P1 | SPEC | `engine.rb#generate_fallback_narrative`, `ComparisonTable.tsx` summary | "Not assessed" skills are excluded from the fallback narrative and from the on-screen summary; there is no coverage figure. *(code-verified)* | A candidate assessed on 2 of 6 skills, both matched, reads as "2 matches, 0 gaps" — looks strong. The reverse also happens. A **partial interview is presented as a complete verdict** about a real person. |
+| F5 | P1 | SPEC | `engine.rb#generate_narratives`, `fit_gap_reports` table | No record of whether the narrative came from the model or the fallback. On failure `culture_narrative` is `nil` and the page silently shows the fallback sentence under the heading "Culture & Competency Fit". *(code-verified)* | Recruiter reads a canned count-sentence as if it were an AI culture assessment. |
+| F6 | P2 | SPEC | `engine.rb#build_skill_comparisons` | Result (`gap`/`match`) ignores `ai_confidence`; a level from **low-confidence** evidence produces a hard "Gap" badge, same as high confidence. | Weak evidence becomes a definitive negative mark on the candidate. |
+| F7 | P2 | DEF | `portfolio_skills_controller.rb#regenerate_stale_fitgap_reports` | On override, existing reports are **destroyed first**, then regeneration is queued. | Between destroy and job completion (or forever, if the job fails) the report is gone; combined with F3 it re-triggers generation from the page. |
+| F8 | P2 | SPEC | `assessor_override.rb` | `assessor_notes` optional — a human can change a candidate's level with no reason recorded. | No audit trail for decisions that change a person's outcome; hard to defend under a candidate complaint. |
+| F9 | P2 | DEF | `FitGapReportPage.tsx` | Non-404 errors are swallowed; missing portfolio / network error renders a header with an empty body. Table has no layout handling for long skill labels / narrow screens beyond horizontal scroll. | Blank screen instead of an actionable error; poor mobile use. |
+| F11 | P1 | DEF | `web/src/utils/internetSpeedTest.ts`, `HardwareCheck.tsx` | The pre-interview check hard-blocks unless download ≥ 8 Mbps **and upload ≥ 4 Mbps**, measured by POSTing 0.5 MB to third-party echo servers (`httpbin.org`, `postman-echo.com`) and timing the full round trip, including their response time. Any error scores 0 → fail. No bypass. *(code-verified; reproduced by us: invite link never got past this step on a normal home connection)* | Candidates on ordinary Indonesian mobile/home internet are **locked out of an interview they cannot opt out of**, although a voice stream needs a fraction of 4 Mbps. The metric measures a US echo server's latency more than the candidate's line. |
+| F10 | P3 | DEF | `engine.rb#find_portfolio_skill` | Label fallback matches on `downcase` only (whitespace/punctuation differences → false "not assessed"). | Occasional wrong "Not assessed". |
+
+### Checked and *not* a problem
+- Duplicate reports from concurrent jobs: prevented by unique index `fit_gap_reports(portfolio_id, vacancy_id)`; worst case is a `RecordNotUnique` retry, not duplicate rows.
+- Missing AI rating: `portfolio_skills.ai_level` is `NOT NULL` with `CHECK 1..5`, so `nil - expected` cannot happen; "missing rating" only appears as *skill absent* → `not_assessed` (see F4).
+- `api/config/application.yml` (contains `SECRET_KEY_BASE`) is git-ignored, not tracked.
+
+## Constraint signals (escalate to Tech Lead)
+
+| # | Signal | Why it blocks / risks |
+|---|---|---|
+| C1 | `TenantResolverMiddleware` derives the tenant from `JsonWebToken.decode_without_verification`, then falls back to `X-Tenant-Scheme` header and `Referer`. Authenticated controllers re-verify the signature later, but unauthenticated candidate paths trust the header. | Tenant selection is client-controlled. Needs a decision on how candidate requests prove their tenant (invite token → session → tenant). |
+| C2 | Auth depends on `rakamin-api` + shared `SECRET_KEY_BASE`; no local auth mode. | New developers cannot log in without minting tokens by hand (see NOTES S5). |
+| C3 | F1's real fix needs `tenant_id` on child tables or scoping through `session` joins; migration must be reversible and backfill existing rows. Tenancy is **row-level** (`tenant_id` + `TenantScoped` default scope, all tables in one `ai_interview` schema) — not schema-per-tenant; an earlier AI-drafted note assuming Apartment schemas was wrong and corrected after reading `database.yml`/`schema.rb`. | Touches data owned by every tenant. |
+| C4 | Full transcripts (candidate's own words, possibly names) are sent to Gemini (`portfolios/generator.rb`). No consent record or retention policy is visible. | UU PDP: purpose limitation, consent, cross-border transfer. Product/legal decision, not just code. |
+| C5 | No specs, no web test runner, no CI. | Every fix above is unprotected against regression until stage 2 lands. |
+
+## Proposed focus for the revamp (input to stage 4)
+
+Fix the **fit/gap report end to end** — F1, F2, F3, F4, F5 (+F6/F7 if cheap): tenant-safe access, a single typed contract between API and web, explicit generation status (`generating | ready | failed`) and narrative source (`ai | fallback`), coverage-aware summary, and a screen that shows every state honestly.
+
+## Not yet done in this stage
+- Manual end-to-end walkthrough with screenshots (requires a completed interview session + Gemini key) — to capture the "before" screen for F2/F3/F4.
