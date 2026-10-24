@@ -83,6 +83,13 @@ namespace :demo do
       FitGap::Engine.new(portfolio: portfolio, vacancy: v, gemini_client: ai).call
       urls['vacancy without skills'] = v
 
+      # Other roles with different skill sets, so the portfolio's vacancy ranking (F18) has contrast.
+      { 'Data Engineer' => { 'SQL & Data Modelling' => 4, 'Apache Spark' => 3, 'Airflow' => 3, 'Kafka' => 2 },
+        'Rails Developer' => { 'Ruby on Rails' => 3, 'API Design' => 3, 'SQL & Data Modelling' => 3 } }.each do |title, skills|
+        v = Vacancy.create!(tenant_id: org.id, created_by: 1, role_title: "#{tag} #{title}")
+        skills.each { |label, lvl| VacancySkill.create!(vacancy: v, skill_label: label, expected_level: lvl) }
+      end
+
       base = "/assessments/#{assessment.id}/sessions/#{session.id}/fitgap"
       puts 'Demo fit/gap reports (open with the web app running):'
       urls.each { |state, vac| puts format('  %-24s %s/%d', state, base, vac.id) }
