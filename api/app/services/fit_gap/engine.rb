@@ -27,6 +27,9 @@ module FitGap
         skill_comparisons: skill_comparisons,
         culture_narrative: narratives[:culture],
         overall_narrative: narratives[:overall],
+        narrative_source:  narratives[:source],
+        status:            'ready',
+        error_message:     nil,
         generated_at:      Time.current
       )
 
@@ -45,6 +48,7 @@ module FitGap
 
         if portfolio_skill
           candidate_level  = portfolio_skill[:effective_level]
+          low_confidence   = portfolio_skill[:confidence] == 'low' && !portfolio_skill[:overridden]
           expected_level   = vacancy_skill.expected_level
           delta            = candidate_level - expected_level
           result           = delta == 0 ? 'match' : (delta > 0 ? 'exceed' : 'gap')
@@ -53,6 +57,7 @@ module FitGap
           expected_level  = vacancy_skill.expected_level
           delta           = nil
           result          = 'not_assessed'
+          low_confidence  = false
         end
 
         {
@@ -62,7 +67,10 @@ module FitGap
           expected_level:  expected_level,
           result:          result,
           delta:           delta,
-          confidence:      portfolio_skill&.dig(:confidence)
+          confidence:      portfolio_skill&.dig(:confidence),
+          ai_level:        portfolio_skill&.dig(:ai_level),
+          is_override:     portfolio_skill ? portfolio_skill[:overridden] : false,
+          low_confidence:  low_confidence
         }
       end
 
@@ -100,11 +108,15 @@ module FitGap
 
       begin
         response = @gemini_client.generate_content(prompt, temperature: 0.4)
-        data = response.is_a?(Hash) ? response : JSON.parse(response)
-        { culture: data['culture_narrative'], overall: data['overall_narrative'] }
+        data = response.is_a?(Hash) ? response : JSON.parse(response.to_s)
+        # Model output is untrusted: a non-object or a missing overall narrative is a failure, not a blank.
+        raise ArgumentError, 'narrative response missing overall_narrative' unless data.is_a?(Hash) && data['overall_narrative'].present?
+
+        { culture: data['culture_narrative'].presence, overall: data['overall_narrative'], source: 'ai' }
       rescue => e
-        Rails.logger.error("[N13] Narrative generation failed: #{e.message}")
-        { culture: nil, overall: generate_fallback_narrative(skill_comparisons) }
+        # Log the error class only: the message may echo model output about the candidate (UU PDP).
+        Rails.logger.error("[N13] Narrative generation failed: #{e.class}")
+        { culture: nil, overall: generate_fallback_narrative(skill_comparisons), source: 'fallback' }
       end
     end
 
@@ -142,8 +154,10 @@ module FitGap
       gaps    = comparisons.count { |c| c[:result] == 'gap' }
       matches = comparisons.count { |c| c[:result] == 'match' }
       exceeds = comparisons.count { |c| c[:result] == 'exceed' }
+      not_assessed = comparisons.count { |c| c[:result] == 'not_assessed' }
 
-      "Candidate shows #{matches} skill matches, #{exceeds} exceeds, and #{gaps} gaps against role requirements."
+      "Automatic summary (AI narrative unavailable): #{matches} match, #{exceeds} exceed, #{gaps} gap " \
+        "and #{not_assessed} not assessed out of #{comparisons.size} required skills."
     end
   end
 end
