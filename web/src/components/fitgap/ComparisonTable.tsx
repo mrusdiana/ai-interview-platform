@@ -86,7 +86,7 @@ export default function ComparisonTable({ comparisons }: ComparisonTableProps) {
                 {/* min width keeps short words whole on phones; long labels wrap at word boundaries */}
                 <td className="min-w-[6rem] px-2.5 sm:px-4 py-2.5 break-words">{c.skill_label}</td>
                 <td className="px-1.5 sm:px-4 py-2.5 text-center text-muted-foreground">
-                  {LEVEL_LABELS[(c as unknown as { required_level: number }).required_level] ?? "—"} {/* SEEDED FAULT */}
+                  {LEVEL_LABELS[c.expected_level] ?? "—"}
                 </td>
                 <td className="px-1.5 sm:px-4 py-2.5 text-center">
                   <CandidateCell comparison={c} />

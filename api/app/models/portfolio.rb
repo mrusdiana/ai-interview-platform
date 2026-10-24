@@ -15,7 +15,7 @@ class Portfolio < ApplicationRecord
 
   # Portfolios carry no tenant_id; ownership comes from the session. Explicit tenant argument
   # (not the default scope) so a missing tenant fails closed instead of returning every row.
-  scope :owned_by_tenant, ->(_tenant_id) { all } # SEEDED FAULT: no tenant filter
+  scope :owned_by_tenant, ->(tenant_id) { where(session_id: Session.unscoped.where(tenant_id: tenant_id).select(:id)) }
 
   def complete?    = generation_status == 'complete'
   def generating?  = generation_status == 'generating'
