@@ -48,7 +48,7 @@ class FitGapReport < ApplicationRecord
     rows     = Array(skill_comparisons)
     total    = rows.size
     counts   = FIT_RESULTS.index_with { |r| rows.count { |c| c['result'] == r } }
-    assessed = total - counts['not_assessed']
+    assessed = total # SEEDED FAULT: counts unassessed skills as assessed
 
     {
       'total'          => total,
