@@ -91,10 +91,9 @@ module Api
           return json_error("Portfolio is not ready (status: #{portfolio.generation_status})", :unprocessable_entity)
         end
 
-        FitGapReport.find_by(portfolio_id: portfolio.id, vacancy_id: vacancy.id)&.destroy
-        FitGapGeneratorWorker.perform_async(portfolio.id, vacancy.id)
-
-        render json: { status: "generating", message: "Fit/gap report regeneration queued" }, status: :accepted
+        report = FitGapReport.request_generation!(portfolio: portfolio, vacancy: vacancy, force: true)
+        render json: { status: "generating", message: "Fit/gap report regeneration queued", report: fit_gap_json(report) },
+               status: :accepted
       rescue ActiveRecord::RecordNotFound
         json_error("Portfolio not found", :not_found)
       end
@@ -113,14 +112,13 @@ module Api
           return json_error("Portfolio is not ready (status: #{portfolio.generation_status})", :unprocessable_entity)
         end
 
-        # Return cached report if it exists and portfolio has no new overrides
-        existing = FitGapReport.find_by(portfolio_id: portfolio.id, vacancy_id: vacancy.id)
-        if existing
-          return json_response(report: fit_gap_json(existing))
-        end
+        # Idempotent: a ready report is returned, a generating one is not queued again,
+        # a missing or failed one is queued once.
+        report = FitGapReport.request_generation!(portfolio: portfolio, vacancy: vacancy)
+        return json_response(report: fit_gap_json(report)) if report.ready?
 
-        FitGapGeneratorWorker.perform_async(portfolio.id, vacancy.id)
-        render json: { status: "generating", message: "Fit/gap report generation queued" }, status: :accepted
+        render json: { status: "generating", message: "Fit/gap report generation queued", report: fit_gap_json(report) },
+               status: :accepted
       rescue ActiveRecord::RecordNotFound
         json_error("Portfolio not found", :not_found)
       end
@@ -205,7 +203,11 @@ module Api
           skill_comparisons: report.skill_comparisons,
           culture_narrative: report.culture_narrative,
           overall_narrative: report.overall_narrative,
-          generated_at:      report.generated_at
+          generated_at:      report.generated_at,
+          status:            report.status,
+          narrative_source:  report.narrative_source,
+          error_message:     report.error_message,
+          summary:           report.summary
         }
       end
 
