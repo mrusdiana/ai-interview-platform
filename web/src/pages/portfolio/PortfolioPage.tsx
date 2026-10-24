@@ -1,26 +1,22 @@
 import { useEffect, useState, useCallback } from "react";
-import { useParams, Link, useNavigate } from "react-router-dom";
+import { useParams, Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import SkillPortfolioCard from "@/components/portfolio/SkillPortfolioCard";
+import VacancyMatchList from "@/components/portfolio/VacancyMatchList";
 import { sessionsApi } from "@/services/sessions";
-import { vacanciesApi } from "@/services/vacancies";
 import { portfoliosApi } from "@/services/portfolios";
 import { usePolling } from "@/hooks/usePolling";
 import { ArrowLeft, Download, Loader2, RefreshCw, Zap, FileText } from "lucide-react";
-import type { Portfolio, AssessorOverride, Vacancy } from "@/types";
+import type { Portfolio, AssessorOverride } from "@/types";
 
 export default function PortfolioPage() {
   const { id, sessionId } = useParams<{ id: string; sessionId: string }>();
-  const navigate = useNavigate();
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
   const [generating, setGenerating] = useState(false);
   const [loading, setLoading] = useState(true);
   const [overrides, setOverrides] = useState<Record<number, AssessorOverride>>({});
-  const [vacancies, setVacancies] = useState<Vacancy[]>([]);
-  const [selectedVacancy, setSelectedVacancy] = useState<string>("");
   const [exporting, setExporting] = useState<"pdf" | "json" | null>(null);
   const [candidateName, setCandidateName] = useState<string | null>(null);
 
@@ -42,9 +38,8 @@ export default function PortfolioPage() {
   }, [sessionId]);
 
   useEffect(() => {
-    Promise.all([fetchPortfolio(), vacanciesApi.list(), sessionsApi.get(Number(sessionId))])
-      .then(([, vRes, sRes]) => {
-        setVacancies(vRes.data.vacancies);
+    Promise.all([fetchPortfolio(), sessionsApi.get(Number(sessionId))])
+      .then(([, sRes]) => {
         setCandidateName(sRes.data.session.candidate_name ?? null);
       })
       .catch(() => {})
@@ -58,19 +53,14 @@ export default function PortfolioPage() {
     setOverrides((prev) => ({ ...prev, [skillId]: override }));
   };
 
-  const handleRunFitGap = () => {
-    if (!selectedVacancy || !portfolio) return;
-    navigate(`/assessments/${id}/sessions/${sessionId}/fitgap/${selectedVacancy}`);
-  };
-
   const handleExport = async (format: "pdf" | "json") => {
     if (!portfolio) return;
     setExporting(format);
     try {
+      // Portfolio only; the fit/gap page exports together with its vacancy.
       const res = await portfoliosApi.exportPortfolio(
         portfolio.id,
         format,
-        selectedVacancy ? Number(selectedVacancy) : undefined
       );
       if (format === "json") {
         const blob = new Blob([JSON.stringify(res.data, null, 2)], { type: "application/json" });
@@ -231,24 +221,19 @@ export default function PortfolioPage() {
 
           <Separator />
 
-          {/* Fit/Gap */}
-          <div className="flex items-center gap-3">
-            <Select value={selectedVacancy} onValueChange={setSelectedVacancy}>
-              <SelectTrigger className="w-56">
-                <SelectValue placeholder="Choose vacancy..." />
-              </SelectTrigger>
-              <SelectContent>
-                {vacancies.map((v) => (
-                  <SelectItem key={v.id} value={String(v.id)}>
-                    {v.role_title}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Button onClick={handleRunFitGap} disabled={!selectedVacancy}>
-              Run Fit/Gap Analysis →
-            </Button>
-          </div>
+          {/* Fit/Gap: compare against every vacancy, best covered first */}
+          <section className="space-y-3" aria-labelledby="vacancy-matches-heading">
+            <div className="space-y-0.5">
+              <h2 id="vacancy-matches-heading" className="text-sm font-semibold">Compare with a vacancy</h2>
+              <p className="text-xs text-muted-foreground">
+                Ranked by how many of each vacancy's required skills this interview covered.
+              </p>
+            </div>
+            <VacancyMatchList
+              portfolioId={portfolio.id}
+              fitGapPath={(vacancyId) => `/assessments/${id}/sessions/${sessionId}/fitgap/${vacancyId}`}
+            />
+          </section>
         </>
       )}
     </div>
