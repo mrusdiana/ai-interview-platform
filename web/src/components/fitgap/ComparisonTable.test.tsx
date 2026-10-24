@@ -3,11 +3,12 @@ import { describe, expect, it } from "vitest";
 import ComparisonTable from "./ComparisonTable";
 import type { SkillComparison } from "@/types";
 
-// Baseline: what the table renders correctly today, before the revamp.
+// Baseline behaviour. Fixtures originally used the web's wrong `required_level` key (finding F2);
+// they now use the field the API actually sends. Assertions are unchanged.
 describe("ComparisonTable", () => {
   const comparisons = [
-    { skill_label: "Communication", required_level: 3, candidate_level: 3, result: "match", delta: 0 },
-    { skill_label: "SQL", required_level: 4, candidate_level: 2, result: "gap", delta: -2 },
+    { skill_label: "Communication", expected_level: 3, candidate_level: 3, result: "match", delta: 0 },
+    { skill_label: "SQL", expected_level: 4, candidate_level: 2, result: "gap", delta: -2 },
   ] as SkillComparison[];
 
   it("renders one row per skill with its result badge", () => {
@@ -21,7 +22,7 @@ describe("ComparisonTable", () => {
   it("marks a skill the candidate was never assessed on", () => {
     render(
       <ComparisonTable
-        comparisons={[{ skill_label: "Kubernetes", required_level: 2, result: "not_assessed" } as SkillComparison]}
+        comparisons={[{ skill_label: "Kubernetes", expected_level: 2, candidate_level: null, result: "not_assessed", delta: null }]}
       />,
     );
 
