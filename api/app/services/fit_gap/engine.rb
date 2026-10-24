@@ -7,16 +7,17 @@ module FitGap
     def initialize(portfolio:, vacancy:, gemini_client: nil)
       @portfolio = portfolio
       @vacancy   = vacancy
-      @gemini_client = gemini_client || Gemini::HttpClient.new(
-        model:   ENV.fetch('GEMINI_FLASH_MODEL', 'gemini-flash-latest'),
-        timeout: 30
-      )
+      @gemini_client = gemini_client
+    end
+
+    # Rule-based comparison only (no model call); also used to rank vacancies for a portfolio.
+    def skill_comparisons
+      @skill_comparisons ||= build_skill_comparisons
     end
 
     # Returns the FitGapReport record.
     def call
-      skill_comparisons = build_skill_comparisons
-      narratives        = generate_narratives(skill_comparisons)
+      narratives = generate_narratives(skill_comparisons)
 
       report = FitGapReport.find_or_initialize_by(
         portfolio_id: @portfolio.id,
@@ -38,6 +39,14 @@ module FitGap
     end
 
     private
+
+    # Built lazily so comparison-only callers never need a Gemini key.
+    def gemini_client
+      @gemini_client ||= Gemini::HttpClient.new(
+        model:   ENV.fetch('GEMINI_FLASH_MODEL', 'gemini-flash-latest'),
+        timeout: 30
+      )
+    end
 
     def build_skill_comparisons
       vacancy_skills = @vacancy.vacancy_skills.index_by(&:skill_label)
@@ -107,7 +116,7 @@ module FitGap
       prompt = build_narrative_prompt(gaps, matches, exceeds, not_assessed)
 
       begin
-        response = @gemini_client.generate_content(prompt, temperature: 0.4)
+        response = gemini_client.generate_content(prompt, temperature: 0.4)
         data = response.is_a?(Hash) ? response : JSON.parse(response.to_s)
         # Model output is untrusted: a non-object or a missing overall narrative is a failure, not a blank.
         raise ArgumentError, 'narrative response missing overall_narrative' unless data.is_a?(Hash) && data['overall_narrative'].present?

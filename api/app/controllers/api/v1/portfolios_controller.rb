@@ -77,6 +77,26 @@ module Api
                   disposition: "attachment"
       end
 
+      # GET /api/v1/portfolios/:id/vacancy_matches
+      # F18: one interview, many possible roles. Ranks this company's vacancies by how much of each
+      # the interview covered, then by total shortfall, using the same rules as the fit/gap report.
+      def vacancy_matches
+        portfolio = tenant_portfolios.find(params[:id])
+
+        matches = Vacancy.includes(:vacancy_skills).map do |vacancy|
+          comparisons = FitGap::Engine.new(portfolio: portfolio, vacancy: vacancy).skill_comparisons
+          summary     = FitGapReport.new(skill_comparisons: comparisons.map(&:deep_stringify_keys)).summary
+          shortfall   = comparisons.sum { |c| c[:delta].to_i.negative? ? -c[:delta] : 0 }
+
+          { vacancy_id: vacancy.id, role_title: vacancy.role_title, summary: summary, shortfall: shortfall }
+        end
+
+        ranked = matches.sort_by { |m| [-m[:summary]['coverage_pct'], m[:shortfall], m[:role_title].downcase] }
+        json_response(matches: ranked)
+      rescue ActiveRecord::RecordNotFound
+        json_error("Portfolio not found", :not_found)
+      end
+
       # POST /api/v1/portfolios/:id/regenerate_fitgap
       def regenerate_fitgap
         portfolio  = tenant_portfolios.find(params[:id])
