@@ -156,6 +156,14 @@ export interface FitGapSummary {
   low_confidence: number;
 }
 
+// Mirrors PortfoliosController#vacancy_matches (api), already ranked.
+export interface VacancyMatch {
+  vacancy_id: number;
+  role_title: string;
+  summary: FitGapSummary;
+  shortfall: number;
+}
+
 export interface FitGapReport {
   id: number;
   portfolio_id: number;
@@ -188,6 +196,7 @@ export interface CandidateInfo {
   role_title: string;
   time_limit_min: number;
   session_status: string;
+  end_reason?: string | null;
 }
 
 export interface PaginationMeta {
@@ -206,7 +215,10 @@ export type InterviewState =
   | "reconnecting"
   | "draining_audio"
   | "ending"
-  | "complete";
+  | "complete"
+  // F13: failures must not be shown as a finished interview.
+  | "connection_lost" // reconnects exhausted; the server keeps the session for a grace period
+  | "failed"; // the session could not start or the server ended it because of an error
 
 export type InterviewSpeaker = "ai" | "candidate" | null;
 
