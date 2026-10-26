@@ -38,6 +38,9 @@ export default function InterviewPage() {
   const connectionLostTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [micMuted, setMicMuted] = useState(false);
   const [failureMessage, setFailureMessage] = useState<string | null>(null);
+  // F20: wall-clock deadline of a session already in progress (rejoin), so the timer keeps
+  // counting while the candidate re-does the device check, just like the server does.
+  const [deadline, setDeadline] = useState<number | null>(null);
   const micMutedRef = useRef(false);
 
   // Fetch candidate info
@@ -47,6 +50,9 @@ export default function InterviewPage() {
       .then((res) => {
         setCandidateInfo(res.data);
         setSessionId(res.data.session_id);
+        if (res.data.session_status === "active" && res.data.remaining_seconds != null) {
+          setDeadline(Date.now() + res.data.remaining_seconds * 1000);
+        }
         if (res.data.session_status === "ended") {
           // F19: an interview cut short by an error is not a completed one.
           setInterviewState(res.data.end_reason === "error" ? "failed" : "complete");
@@ -290,6 +296,7 @@ export default function InterviewPage() {
         {candidateInfo && (
           <InterviewTimer
             totalSeconds={candidateInfo.time_limit_min * 60}
+            remainingSeconds={deadline != null ? Math.max(0, Math.round((deadline - Date.now()) / 1000)) : undefined}
             running={interviewState === "active"}
             onExpired={endInterview}
           />
